@@ -4,25 +4,43 @@ module Fastbit
   extend FFI::Library
   ffi_lib 'libfastbit'
 
-  attach_function :fastbit_get_version_string, [ ], :string
-  attach_function :fastbit_init, [:string], :void
+  def self.attach_function(c_name, args, returns)
+    ruby_name = c_name.to_s.sub(/\Afastbit_/, "")
+    super(ruby_name, c_name, args, returns)
+  end
+
+  Fastbit::DEBUG = 7
+  Fastbit::INFO = 5
+  Fastbit::WARN = 3
+  Fastbit::ERROR = 1
+
+  typedef :string, :dir
+  typedef :string, :cname
+  typedef :string, :options
+  typedef :string, :cfg_file
+  typedef :string, :filename
+  typedef :string, :colname
+  typedef :string, :coltype
+  typedef :pointer, :vals
+
+  attach_function :fastbit_get_version_string, [], :string
+  attach_function :fastbit_init, [:cfg_file], :void
   attach_function :fastbit_cleanup, [], :void
   attach_function :fastbit_set_verbose_level, [:int ], :int
-  #/** @brief Return the current verboseness level. */
   attach_function :fastbit_get_verbose_level, [], :int
-  #/** @brief Change the name of the log file. */
-  attach_function :fastbit_set_logfile, [:string], :int
-  #/** @brief Find out the name of the current log file. */
+  attach_function :fastbit_set_logfile, [:filename], :int
   attach_function :fastbit_get_logfile, [], :string
-  #/** @brief Return the file pointer to the log file. */
   attach_function :fastbit_get_logfilepointer, [], :pointer
 
+  attach_function :fastbit_flush_buffer, [:dir], :int
+  attach_function :fastbit_add_values, [:colname, :coltype, :vals, :uint, :uint], :int  # :vals is a pointer to a list
+  attach_function :fastbit_rows_in_partition, [:dir], :int
+  attach_function :fastbit_columns_in_partition, [:dir], :int
 
-
-  attach_function :fastbit_build_indexes, [:string, :string], :int
-  attach_function :fastbit_purge_indexes, [:string], :int
-  attach_function :fastbit_build_index, [:string, :string, :string], :string
-  attach_function :fastbit_purge_index, [:string, :string], :int
+  attach_function :fastbit_build_indexes, [:dir, :options], :int
+  attach_function :fastbit_purge_indexes, [:dir], :int
+  attach_function :fastbit_build_index, [:dir, :cname, :options], :int
+  attach_function :fastbit_purge_index, [:dir, :cname], :int
   attach_function :fastbit_reorder_partition, [:string], :int
 
 
