@@ -4,16 +4,14 @@ module Fastbit
   extend FFI::Library
   ffi_lib 'libfastbit'
 
-  def self.attach_function(c_name, args, returns)
-    ruby_name = c_name.to_s.sub(/\Afastbit_/, "")
-    super(ruby_name, c_name, args, returns)
-  end
-
-  Fastbit::DEBUG = 7
+  Fastbit::DEBUG = 0x7fffffff
   Fastbit::INFO = 5
   Fastbit::WARN = 3
   Fastbit::ERROR = 1
+  Fastbit::FATAL = 0
 
+  typedef :uint,    :start
+  typedef :uint,    :count
   typedef :string, :dir
   typedef :string, :cname
   typedef :string, :options
@@ -22,6 +20,16 @@ module Fastbit
   typedef :string, :colname
   typedef :string, :coltype
   typedef :pointer, :vals
+  #  struct FastBitQuery;
+  typedef :pointer, :queryh
+
+  attach_function :add_values_orig, :fastbit_add_values, [:colname, :coltype, :vals, :count, :start], :int
+
+  # automatically rename functions and remove redundant fastbit_ prefix
+  def self.attach_function(c_name, args, returns)
+    ruby_name = c_name.to_s.sub(/\Afastbit_/, "")
+    super(ruby_name, c_name, args, returns)
+  end
 
   attach_function :fastbit_get_version_string, [], :string
   attach_function :fastbit_init, [:cfg_file], :void
@@ -33,7 +41,6 @@ module Fastbit
   attach_function :fastbit_get_logfilepointer, [], :pointer
 
   attach_function :fastbit_flush_buffer, [:dir], :int
-  attach_function :fastbit_add_values, [:colname, :coltype, :vals, :uint, :uint], :int  # :vals is a pointer to a list
   attach_function :fastbit_rows_in_partition, [:dir], :int
   attach_function :fastbit_columns_in_partition, [:dir], :int
 
@@ -44,8 +51,133 @@ module Fastbit
   attach_function :fastbit_reorder_partition, [:string], :int
 
 
-  #  struct FastBitQuery;
-  #  typedef struct FastBitQuery* FastBitQueryHandle;
+  def Fastbit.infer_coltype(vals)
+    #puts "-"*40
+    #puts "infer_coltype(#{vals})"
+
+    signed = false
+    val_class = vals.first.class
+    vals.each { |vv|
+      #puts "#{vv}: #{vv.class}"
+      return -1 if vv.class != val_class
+      if val_class.ancestors.include?(Numeric)
+        signed = true if vv < 0
+      end
+    }
+
+    #puts "val_class: #{val_class}"
+
+    if val_class == Fixnum
+      return('b')  if vals.max < 128 && signed
+      return('ub') if vals.max < 256 && !signed
+      return('s')  if vals.max < 8192 && signed
+      return('us') if vals.max < 16384 && !signed
+      return('i')  if vals.max < (0xffffffff+1)/2 && signed
+      return('ui') if vals.max < (0xffffffff+1) && !signed
+      return('l')  if vals.max < (0xffffffff_ffffffff + 1)/2 && signed
+      return('ul') if vals.max < (0xffffffff_ffffffff + 1) && !signed
+      #puts "no match for #{vals.max}, #{vals}"
+      return(-1)
+    elsif val_class == String
+      return('t')
+    elsif val_class == Float
+      return('f')
+    else
+      return(nil)
+    end
+  end
+
+  def Fastbit.coltype_to_valtype(ct)
+    #puts "coltype_to_valtype(#{ct})"
+    case ct
+    when 't'
+      return :string
+    when 'ul'
+      return :ulong
+    when 'l'
+      return :long
+    when 'ui'
+      return :uint
+    when 'i'
+      return :int
+    when 'us'
+      return :ushort
+    when 's'
+      return :short
+    when 'ub'
+      return :ubyte
+    when 'b'
+      return :byte
+    end
+    return :unknown
+  end
+
+  def Fastbit.get_pointer(type, vals)
+    #puts "get_pointer(#{type.to_s}, #{vals})"
+    p = FFI::MemoryPointer.new(type, vals.length)
+    case type
+    when :byte
+      p.put_array_of_int8(0, vals)
+    when :ubyte
+      p.put_array_of_uint8(0, vals)
+    when :short
+      p.put_array_of_int16(0, vals)
+    when :ushort
+      p.put_array_of_uint16(0, vals)
+    when :int
+      p.put_array_of_int32(0, vals)
+    when :uint
+      p.put_array_of_uint32(0, vals)
+    when :string
+      p = FFI::MemoryPointer.new(:pointer, vals.length + 1)
+      ptrs = vals.map {|str| FFI::MemoryPointer.from_string(str)}
+      p.put_array_of_pointer(0, ptrs)
+    else
+      return(nil)
+    end
+    p
+  end
+
+  def Fastbit.add_values(*args)
+    val_len = nil
+    start = nil
+    colname = args[0]
+    val_p = nil
+    if args.length == 2
+      vals = args[1]
+      count = vals.length
+      start = 0
+      coltype = infer_coltype(vals)
+      valtype = coltype_to_valtype(coltype)
+      puts "args.length == 2\ncoltype #{coltype}, valtype: #{valtype}"
+      val_p = get_pointer(valtype, vals)
+    elsif args.length >= 3
+      coltype = args[1]
+      valtype = coltype_to_valtype(coltype)
+      puts "args.length == 3\ncoltype #{coltype}, valtype: #{valtype}"
+      vals = args[2]
+      count = vals.length
+      start = 0
+      val_p = get_pointer(valtype, vals)
+    elsif args.length == 5
+      coltype = args[1]
+      valtype = coltype_to_valtype(coltype)
+      puts "args.length == 5\ncoltype #{coltype}, valtype: #{valtype}"
+      vals = args[2]
+      count = args[3]
+      start = args[4]
+      val_len = count
+      val_p = get_pointer(valtype, vals)
+    end
+
+    unless defined?(vals) && vals.class == Array &&
+           vals.length > 0 && (vals.length - start) >= count
+      #puts "val error"
+      return(nil)
+    end
+
+    Fastbit.add_values_orig(colname, coltype, val_p, count, start)
+  end
 
 
   attach_function :fastbit_build_query, [:string, :string, :string], :pointer  # FASTBIT_DLLSPEC FastBitQueryHandle
@@ -61,17 +193,17 @@ module Fastbit
   #/** @brief Return the where clause of the query. */
   attach_function :fastbit_get_where_clause, [:pointer] , :string
 
-#    FASTBIT_DLLSPEC const float* fastbit_get_qualified_floats(FastBitQueryHandle query, const char* cname)
-#    FASTBIT_DLLSPEC const double* fastbit_get_qualified_doubles(FastBitQueryHandle query, const char* cname)
-#    FASTBIT_DLLSPEC const signed char* fastbit_get_qualified_bytes(FastBitQueryHandle query, const char* cname)
-#    FASTBIT_DLLSPEC const int16_t* fastbit_get_qualified_shorts(FastBitQueryHandle query, const char* cname)
-#    FASTBIT_DLLSPEC const int32_t* fastbit_get_qualified_ints(FastBitQueryHandle query, const char* cname)
-#    FASTBIT_DLLSPEC const int64_t* fastbit_get_qualified_longs(FastBitQueryHandle query, const char* cname)
-#    FASTBIT_DLLSPEC const unsigned char* fastbit_get_qualified_ubytes(FastBitQueryHandle query, const char* cname)
-#    FASTBIT_DLLSPEC const uint16_t* fastbit_get_qualified_ushorts(FastBitQueryHandle query, const char* cname)
-#    FASTBIT_DLLSPEC const uint32_t* fastbit_get_qualified_uints(FastBitQueryHandle query, const char* cname)
-#    FASTBIT_DLLSPEC const uint64_t* fastbit_get_qualified_ulongs(FastBitQueryHandle query, const char* cname)
-#    FASTBIT_DLLSPEC const char** fastbit_get_qualified_strings(FastBitQueryHandle query, const char* cname)
+  attach_function :fastbit_get_qualified_floats,   [:queryh, :cname], :pointer
+  attach_function :fastbit_get_qualified_doubles,  [:queryh, :cname], :pointer
+  attach_function :fastbit_get_qualified_bytes,    [:queryh, :cname], :pointer
+  attach_function :fastbit_get_qualified_shorts,   [:queryh, :cname], :pointer
+  attach_function :fastbit_get_qualified_ints,     [:queryh, :cname], :pointer
+  attach_function :fastbit_get_qualified_longs,    [:queryh, :cname], :pointer
+  attach_function :fastbit_get_qualified_ubytes,   [:queryh, :cname], :pointer
+  attach_function :fastbit_get_qualified_ushorts,  [:queryh, :cname], :pointer
+  attach_function :fastbit_get_qualified_uints,    [:queryh, :cname], :pointer
+  attach_function :fastbit_get_qualified_ulongs,   [:queryh, :cname], :pointer
+  attach_function :fastbit_get_qualified_strings,  [:queryh, :cname], :pointer
 end
 
 if __FILE__ == $0
