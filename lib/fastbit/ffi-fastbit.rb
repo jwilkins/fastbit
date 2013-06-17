@@ -1,4 +1,5 @@
 require 'ffi'
+require 'debugger'
 
 module Fastbit
   extend FFI::Library
@@ -19,11 +20,50 @@ module Fastbit
   typedef :string, :filename
   typedef :string, :colname
   typedef :string, :coltype
+  typedef :string, :query_cond
   typedef :pointer, :vals
+
   #  struct FastBitQuery;
   typedef :pointer, :queryh
 
-  attach_function :add_values_orig, :fastbit_add_values, [:colname, :coltype, :vals, :count, :start], :int
+  attach_function :add_values_orig, :fastbit_add_values, 
+                  [:colname, :coltype, :vals, :count, :start], :int
+
+  attach_function :get_qualified_floats_orig, :fastbit_get_qualified_floats,
+                  [:queryh, :cname], :pointer
+  attach_function :get_qualified_doubles_orig, :fastbit_get_qualified_doubles,  
+                  [:queryh, :cname], :pointer
+  attach_function :get_qualified_bytes_orig, :fastbit_get_qualified_bytes,
+                  [:queryh, :cname], :pointer
+  attach_function :get_qualified_shorts_orig, :fastbit_get_qualified_shorts,
+                  [:queryh, :cname], :pointer
+  attach_function :get_qualified_ints_orig, :fastbit_get_qualified_ints,
+                  [:queryh, :cname], :pointer
+  attach_function :get_qualified_longs_orig, :fastbit_get_qualified_longs,
+                  [:queryh, :cname], :pointer
+  attach_function :get_qualified_ubytes_orig, :fastbit_get_qualified_ubytes,
+                  [:queryh, :cname], :pointer
+  attach_function :get_qualified_ushorts_orig, :fastbit_get_qualified_ushorts,
+                  [:queryh, :cname], :pointer
+  attach_function :get_qualified_uints_orig, :fastbit_get_qualified_uints,
+                  [:queryh, :cname], :pointer
+  attach_function :get_qualified_ulongs_orig, :fastbit_get_qualified_ulongs,
+                  [:queryh, :cname], :pointer
+  attach_function :get_qualified_strings_orig, :fastbit_get_qualified_strings,
+                  [:queryh, :cname], :pointer
+
+  class IntAry < FFI::Struct
+    layout  :intv, :int
+  end
+
+  def Fastbit.get_qualified_ints(queryh, col_name)
+    debugger
+    return nil unless queryh && col_name
+    results = []
+    count = Fastbit.get_result_rows(queryh)
+    intp = Fastbit.get_qualified_ints_orig(queryh, col_name)
+    intp.read_array_of_int(count)
+  end
 
   # automatically rename functions and remove redundant fastbit_ prefix
   def self.attach_function(c_name, args, returns)
@@ -180,8 +220,8 @@ module Fastbit
   end
 
 
-  attach_function :fastbit_build_query, [:string, :string, :string], :pointer  # FASTBIT_DLLSPEC FastBitQueryHandle
-  attach_function :fastbit_destroy_query, [:pointer], :int # (FastBitQueryHandle query)
+  attach_function :fastbit_build_query, [:string, :string, :string], :queryh
+  attach_function :fastbit_destroy_query, [:queryh], :int
 
   attach_function :fastbit_get_result_rows, [:pointer], :int
   #/** @brief Count the number of columns selected in the select clause of the query. */
@@ -193,19 +233,26 @@ module Fastbit
   #/** @brief Return the where clause of the query. */
   attach_function :fastbit_get_where_clause, [:pointer] , :string
 
-  attach_function :fastbit_get_qualified_floats,   [:queryh, :cname], :pointer
-  attach_function :fastbit_get_qualified_doubles,  [:queryh, :cname], :pointer
-  attach_function :fastbit_get_qualified_bytes,    [:queryh, :cname], :pointer
-  attach_function :fastbit_get_qualified_shorts,   [:queryh, :cname], :pointer
-  attach_function :fastbit_get_qualified_ints,     [:queryh, :cname], :pointer
-  attach_function :fastbit_get_qualified_longs,    [:queryh, :cname], :pointer
-  attach_function :fastbit_get_qualified_ubytes,   [:queryh, :cname], :pointer
-  attach_function :fastbit_get_qualified_ushorts,  [:queryh, :cname], :pointer
-  attach_function :fastbit_get_qualified_uints,    [:queryh, :cname], :pointer
-  attach_function :fastbit_get_qualified_ulongs,   [:queryh, :cname], :pointer
-  attach_function :fastbit_get_qualified_strings,  [:queryh, :cname], :pointer
 end
 
 if __FILE__ == $0
-  puts Fastbit.fastbit_get_version_string
+  puts Fastbit.get_version_string
+  FileUtils.rm_r("tmp/demo")
+  Fastbit.init("")
+  Fastbit.add_values("intcol", (1..1000).to_a)
+  Fastbit.flush_buffer("tmp/demo")
+  rows = Fastbit.rows_in_partition("tmp/demo")
+  puts "created #{rows} rows."
+  select_clause = ""
+  index_location = "tmp/demo"
+  query_conditions = "intcol < 10"
+  query = Fastbit.build_query(select_clause, index_location, query_conditions)
+  rows = Fastbit.get_result_rows(query)
+  puts "query returned #{rows} rows (should be 9)"
+
+  entries = Fastbit.get_qualified_ints(query, "intcol")
+  entries.each { |rr|
+    puts "  #{rr}"
+  }
+
 end

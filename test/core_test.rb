@@ -1,6 +1,11 @@
 require_relative '../test/test_helper'
 
 describe Fastbit do
+  def self.prepare
+    FileUtils.mkdir_p("tmp/part1")
+  end
+
+  prepare 
   it "must have a version" do
     Fastbit::VERSION.wont_be_nil
   end
@@ -10,8 +15,8 @@ describe Fastbit do
   end
 
   it "must set and remember logfile" do
-    Fastbit.set_logfile("fastbit.log")
-    Fastbit.get_logfile.must_equal "fastbit.log"
+    Fastbit.set_logfile("tmp/fastbit.log")
+    Fastbit.get_logfile.must_equal "tmp/fastbit.log"
   end
 
   it "must set and remember verbosity" do
@@ -20,12 +25,12 @@ describe Fastbit do
   end
 
   def add_int_array
-    Fastbit.purge_indexes("part1")
+    Fastbit.purge_indexes("tmp/part1")
     p = FFI::MemoryPointer.new(:int, 6)
     p.put_array_of_int32(0, [ 2, 1, 4, 6, 3, 5 ])
     res = Fastbit.add_values_orig("col1", "int", p, 6, 0)
     puts "add_values returned #{res}"
-    Fastbit.flush_buffer("part1")
+    Fastbit.flush_buffer("tmp/part1")
   end
 
   it "must infer coltype" do
@@ -48,48 +53,69 @@ describe Fastbit do
   end
 
   it "must log to logfile" do
-    `rm fastbit-debug.log`
-    Fastbit.set_logfile("fastbit-debug.log")
-    Fastbit.set_verbose_level(Fastbit::DEBUG)
-    add_int_array
-    File.exist?("fastbit-debug.log").wont_equal false
+  end
 
-    `rm fastbit-info.log`
-    Fastbit.set_logfile("fastbit-info.log")
-    Fastbit.set_verbose_level(Fastbit::INFO)
-    add_int_array
+  def log_at_level(level)
+    return nil unless %w(debug info warn error fatal).include?(level.downcase)
+    `rm tmp/fastbit-#{level.downcase}.log`
+    Fastbit.set_logfile("tmp/fastbit-#{level.downcase}.log")
+    Fastbit.set_verbose_level(eval("Fastbit::#{level.upcase}"))
+  end
 
-    `rm fastbit-warn.log`
-    Fastbit.set_logfile("fastbit-warn.log")
-    Fastbit.set_verbose_level(Fastbit::WARN)
+  it "should log most at log level DEBUG" do
+    log_at_level('debug')
     add_int_array
+    File.exist?("tmp/fastbit-debug.log").wont_equal false
+    dlog_size = File.stat('tmp/fastbit-debug.log').size
+  end
 
-    `rm fastbit-error.log`
-    Fastbit.set_logfile("fastbit-error.log")
-    Fastbit.set_verbose_level(Fastbit::ERROR)
+  it "should log less at log level INFO" do
+    log_at_level('info')
     add_int_array
+    File.exist?("tmp/fastbit-debug.log").wont_equal false
+  end
 
-    `rm fastbit-fatal.log`
+  it "should log less at log level WARN" do
+    log_at_level('warn')
+    add_int_array
+    File.exist?("tmp/fastbit-debug.log").wont_equal false
+  end
+
+  it "should log less at log level ERROR" do
+    log_at_level('error')
+    add_int_array
+    File.exist?("tmp/fastbit-debug.log").wont_equal false
+  end
+
+  it "should log least at log level FATAL" do
+    `rm tmp/fastbit-fatal.log`
     Fastbit.set_verbose_level(Fastbit::FATAL)
-    Fastbit.set_logfile("fastbit-fatal.log")
+    Fastbit.set_logfile("tmp/fastbit-fatal.log")
     add_int_array
+    File.exist?("tmp/fastbit-debug.log").wont_equal false
 
-    Fastbit.set_logfile("fastbit.log")
+    Fastbit.set_logfile("tmp/fastbit.log")
   end
 
   it "must store data" do
     Fastbit.set_verbose_level(Fastbit::FATAL)
     Fastbit.init("")
-    Fastbit.flush_buffer("part1")
+    Fastbit.flush_buffer("tmp/part1")
     add_int_array
-    Fastbit.rows_in_partition("part1").must_be :>, 6
-    cols = Fastbit.columns_in_partition("part1")
+    Fastbit.rows_in_partition("tmp/part1").must_be :>, 6
+    cols = Fastbit.columns_in_partition("tmp/part1")
     cols.must_equal 1
 
   end
 
   it "must count rows" do
-
+    rows = Fastbit.rows_in_partition("tmp/part1")
+    rows.must_equal 1550
   end
 
 end
+
+MiniTest::Unit.after_tests {
+  FileUtils.mv("tmp/part1", "tmp/part1-#{Time.now.strftime('%Y%m%d%H%M%S')}")
+}
+
